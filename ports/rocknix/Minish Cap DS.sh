@@ -71,9 +71,24 @@ BOTTOM_POWERED_BY_US=0
 
 if command -v swaymsg >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && swaymsg -t get_version >/dev/null 2>&1; then
   outs=$(swaymsg -t get_outputs -r)
-  TOP=$(echo "$outs" | jq -r '[.[] | select(.focused)][0].name // empty')
-  [ -z "$TOP" ] && TOP=$(echo "$outs" | jq -r '.[0].name // empty')
-  BOTTOM=$(echo "$outs" | jq -r --arg t "$TOP" '[.[] | select(.name != $t)][0].name // empty')
+  has_output() { echo "$outs" | jq -e --arg n "$1" 'any(.[]; .name == $n)' >/dev/null; }
+  # Which panel is which. On the RG DS family the bottom (touch) panel is
+  # the first DSI connector: DSI-1 bottom, DSI-2 top. Sway's focus is not a
+  # reliable signal (it follows whatever was last touched in ES).
+  # TMC_TOP_OUTPUT / TMC_BOTTOM_OUTPUT override; other devices fall back to
+  # "focused output = top".
+  if [ -n "$TMC_TOP_OUTPUT" ] && [ -n "$TMC_BOTTOM_OUTPUT" ]; then
+    TOP="$TMC_TOP_OUTPUT"
+    BOTTOM="$TMC_BOTTOM_OUTPUT"
+  elif case "$QUIRK_DEVICE" in "Anbernic RG DS"*) true ;; *) false ;; esac \
+       && has_output DSI-1 && has_output DSI-2; then
+    TOP=DSI-2
+    BOTTOM=DSI-1
+  else
+    TOP=$(echo "$outs" | jq -r '[.[] | select(.focused)][0].name // empty')
+    [ -z "$TOP" ] && TOP=$(echo "$outs" | jq -r '.[0].name // empty')
+    BOTTOM=$(echo "$outs" | jq -r --arg t "$TOP" '[.[] | select(.name != $t)][0].name // empty')
+  fi
 
   if [ -n "$BOTTOM" ]; then
     active=$(echo "$outs" | jq -r --arg b "$BOTTOM" '.[] | select(.name == $b) | .active')
@@ -176,6 +191,8 @@ chmod +x ./tmc_pc
 
 # ---- Restore ---------------------------------------------------------------
 [ -n "$PLACER" ] && kill "$PLACER" 2>/dev/null
+# Hand focus back to the top screen so EmulationStation comes back where it was.
+[ -n "$TOP" ] && command -v swaymsg >/dev/null 2>&1 && swaymsg focus output "$TOP" >/dev/null 2>&1
 for i in "${!GOV_FILES[@]}"; do
   echo "${GOV_SAVED[$i]}" >"${GOV_FILES[$i]}" 2>/dev/null
 done

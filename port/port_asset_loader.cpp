@@ -1,3 +1,5 @@
+#include "port_blob_index.hpp"
+#include <mutex>
 #include "port_asset_loader.h"
 #include "port_asset_pipeline.hpp"
 #include "port_asset_pak_loader.hpp"
@@ -1817,25 +1819,20 @@ extern "C" bool32 Port_IsRoomHeaderPtrReadable(const void* ptr) {
     return FALSE;
 }
 
+/* Sorted [begin, end) ranges of every cached blob — see port_blob_index.hpp.
+ * Called on every DMA/MemCopy source and animation read, so this must not
+ * walk the cache. The mutex covers the rare rebuild after new assets load;
+ * every caller today is the game thread, so it is never contended. */
+static port_blob_index::Index sBlobIndex;
+static std::mutex sBlobIndexMutex;
+
 extern "C" bool32 Port_IsLoadedAssetBytes(const void* ptr, u32 size) {
     if (ptr == nullptr) {
         return FALSE;
     }
-
-    for (const auto& [_, dataPtr] : gAssetGroupCache.binaryFiles) {
-        if (dataPtr == nullptr || dataPtr->empty()) {
-            continue;
-        }
-
-        const u8* begin = dataPtr->data();
-        const u8* end = begin + dataPtr->size();
-        const u8* at = static_cast<const u8*>(ptr);
-        if (at >= begin && at <= end && size <= static_cast<u32>(end - at)) {
-            return TRUE;
-        }
-    }
-
-    return FALSE;
+    std::lock_guard<std::mutex> lock(sBlobIndexMutex);
+    sBlobIndex.Sync(gAssetGroupCache.binaryFiles);
+    return sBlobIndex.Contains(ptr, size) ? TRUE : FALSE;
 }
 
 /*
@@ -1849,18 +1846,9 @@ extern "C" const u8* Port_LoadedAssetBytesEnd(const void* ptr) {
     if (ptr == nullptr) {
         return nullptr;
     }
-    const u8* at = static_cast<const u8*>(ptr);
-    for (const auto& [_, dataPtr] : gAssetGroupCache.binaryFiles) {
-        if (dataPtr == nullptr || dataPtr->empty()) {
-            continue;
-        }
-        const u8* begin = dataPtr->data();
-        const u8* end = begin + dataPtr->size();
-        if (at >= begin && at < end) {
-            return end;
-        }
-    }
-    return nullptr;
+    std::lock_guard<std::mutex> lock(sBlobIndexMutex);
+    sBlobIndex.Sync(gAssetGroupCache.binaryFiles);
+    return sBlobIndex.EndOf(ptr);
 }
 
 extern "C" const u8* Port_GetMapAssetDataByIndex(u32 assetIndex, u32* size) {

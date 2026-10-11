@@ -49,7 +49,7 @@ The launcher writes `minishcapds/log.txt` on every run. Look for the
 
 | Symptom | Try |
 |---|---|
-| Panel on the wrong screen, or both on one screen | The launcher moves the windows after they open. If that still fails, check which outputs it found (`top=… bottom=…` in the log). |
+| Panel on the wrong screen, or both on one screen | On the RG DS / RG DS Plus the launcher puts the game on `DSI-2` and the panel on `DSI-1` (the touch panel). Check `top=… bottom=…` in the log; set `TMC_TOP_OUTPUT` and `TMC_BOTTOM_OUTPUT` to override. |
 | Bottom screen stays black | Look for `[second_screen] panel window …` in the log. If it says "only one display", sway has the bottom output disabled. Enable it in ROCKNIX's display settings. |
 | Taps do nothing | Check the `[second_screen] touch:` log line. If no touchscreen matched, run `ls -l /sys/class/input/event*/device` and set `TMC_PANEL_TOUCH_MATCH` (or `TMC_PANEL_TOUCH=/dev/input/eventN`) at the top of the launcher. |
 | Taps land in the wrong place | Set `TMC_PANEL_TOUCH_ROTATE=90/180/270`, `TMC_PANEL_TOUCH_FLIPX=1` or `TMC_PANEL_TOUCH_FLIPY=1` in the launcher. |
