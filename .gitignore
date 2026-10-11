@@ -175,3 +175,6 @@ android/app/build/
 *.jks
 *.keystore
 keystore.properties
+
+# ImGui checkout for the ROCKNIX dual-screen build (ports/rocknix/build.sh)
+libs/imgui/

@@ -118,7 +118,11 @@ bool sShowFps = false;
 /* The Android touch overlay (port_touch_controls.cpp). Off removes it from
  * the screen AND stops it consuming touches — a handheld with real buttons
  * wants neither the clutter over the game nor the dead zones under it. */
+#ifdef PORT_DUAL_SCREEN_LINUX
+bool sTouchControls = false; /* RG DS family: real buttons; the touchscreen is the panel's */
+#else
 bool sTouchControls = true;
+#endif
 int sPreferredRegion = -1;
 int sPreferredLanguage = -1;
 /* Widescreen pillarbox config — applied in port_ppu.cpp's present path.
@@ -127,7 +131,7 @@ int sPreferredLanguage = -1;
  * blurred ambient fill so no scene shows dead black bars. "black" restores
  * the historical plain-bars look. */
 PortAspectMode sAspectMode = PORT_ASPECT_NATIVE_3_2;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* handheld defaults */
 PortBgFill sBgFill = PORT_BG_FILL_BLACK; /* "blurred" reads as glitchy duplicated tiles on real widescreen panels */
 #else
 PortBgFill sBgFill = PORT_BG_FILL_BLURRED_FRAME;
@@ -136,7 +140,7 @@ u8 sBgFillR = 0, sBgFillG = 0, sBgFillB = 0;
 /* Renderer backend selection — read once at PPU init; menu writes
  * here but a restart is needed to apply because the window's
  * swapchain owner is set once and is not live-switchable. */
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* handheld defaults */
 /* "Auto" picks the SDL_GPU/Vulkan backend on capable Adreno GPUs (e.g. AYN
  * Thor), whose ImGui/swapchain path has an unresolved resize bug that leaves
  * everything past the pre-fullscreen window width unpainted. Force the
@@ -211,7 +215,7 @@ bool sGpuRaster = true;
  * stays default-on since it's a real win. Flip on to try GLES on a stronger
  * GLES-only GPU. */
 bool sGpuRasterGles = false;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* handheld defaults */
 bool sColorCorrect = false; /* Too heavy for low-end ARM by default */
 #else
 bool sColorCorrect = true; /* GBA-LCD colour correction (default on) */
@@ -223,7 +227,7 @@ bool sMenuHintSeen = false;    /* set once the F8/settings menu is first opened 
 float sMasterVolume = 1.0f;    /* game master volume [0,1]; 1.0 = unchanged */
 bool sHoldAdvanceText = false; /* hold an advance key to keep paging text */
 bool sRollAttackMacroEnabled = true;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* handheld defaults */
 bool sFullscreen = true; /* no windowed mode on a handheld; avoid a visible nav bar */
 #else
 bool sFullscreen = false;
@@ -327,7 +331,11 @@ const BoolCfg kBoolCfg[] = {
     { "console_parity", &sConsoleParity, false },
     { "decouple_render", &sDecoupleRender, true },
     { "show_fps", &sShowFps, false },
+#ifdef PORT_DUAL_SCREEN_LINUX
+    { "touch_controls", &sTouchControls, false },
+#else
     { "touch_controls", &sTouchControls, true },
+#endif
     { "tts_enabled", &sTtsEnabled, true },
     { "a11y_cues", &sA11yCues, false },
     { "a11y_footsteps", &sA11yFootsteps, false },
@@ -346,7 +354,7 @@ const BoolCfg kBoolCfg[] = {
     { "vsync", &sVSyncCfg, true },
     { "gpu_raster", &sGpuRaster, true },
     { "gpu_raster_gles", &sGpuRasterGles, false },
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* handheld defaults */
     { "color_correction", &sColorCorrect, false },
 #else
     { "color_correction", &sColorCorrect, true },
@@ -356,7 +364,7 @@ const BoolCfg kBoolCfg[] = {
     { "menu_hint_seen", &sMenuHintSeen, false },
     { "hold_advance_text", &sHoldAdvanceText, false },
     { "roll_attack_macro", &sRollAttackMacroEnabled, true },
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* handheld defaults */
     { "fullscreen", &sFullscreen, true },
 #else
     { "fullscreen", &sFullscreen, false },
@@ -423,13 +431,13 @@ nlohmann::json DefaultsJson(void) {
     j["autosave_interval_ms"] = 60000;
     j["touch_scheme"] = "joystick";
     j["aspect_mode"] = "native";
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* handheld defaults */
     j["bg_fill"] = "black";
 #else
     j["bg_fill"] = "blurred";
 #endif
     j["bg_fill_color"] = { 0, 0, 0 };
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* handheld defaults */
     j["render_backend"] = "software";
 #else
     j["render_backend"] = "auto";

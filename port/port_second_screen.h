@@ -83,6 +83,18 @@ void Port_SecondScreen_OnTap(int x, int y, int longPress);
 void Port_SecondScreen_SetGameOnSecondaryDisplay(int onSecondary);
 int Port_SecondScreen_GameOnSecondaryDisplay(void);
 
+#if defined(PORT_DUAL_SCREEN_LINUX) && defined(__linux__) && !defined(__ANDROID__)
+/* Linux dual-screen hosts (port_second_screen_linux.c). Main thread only.
+ * LinuxPump: once per game frame — opens the panel window on first call,
+ * then uploads/presents the newest painted frame. LinuxHandleEvent: offer
+ * every SDL event first; returns nonzero if it was the panel window's
+ * (taps, window lifecycle) and must not reach the game. */
+#define PORT_SECOND_SCREEN_LINUX_HOST 1
+union SDL_Event;
+void Port_SecondScreen_LinuxPump(void);
+int Port_SecondScreen_LinuxHandleEvent(const union SDL_Event* e);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

@@ -46,6 +46,7 @@
  */
 
 #include "port_second_screen.h"
+#include "port_second_screen_platform.h"
 #include "port_second_screen_dungeonmap.h"
 #include "port_second_screen_quest.h"
 #include "port_second_screen_render.h"
@@ -268,7 +269,7 @@ static struct {
 /* sUi.questView */
 enum { SS_QUEST_MAIN = 0, SS_QUEST_KINSTONES, SS_QUEST_TECHNIQUES };
 
-#ifdef __ANDROID__
+#if PORT_SS_LIVE
 #include <pthread.h>
 static pthread_mutex_t sTapTargetMutex = PTHREAD_MUTEX_INITIALIZER;
 #define UI_LOCK() pthread_mutex_lock(&sTapTargetMutex)
@@ -1834,6 +1835,13 @@ static int VisibleSettingRows(uint8_t* out) {
             continue;
         }
 #endif
+#ifdef PORT_SS_LINUX
+        /* The on-screen pad belongs to touch-only phones; the RG DS family
+         * has real buttons and its top screen gets no touch here. */
+        if (i == SS_SET_TOUCH_CONTROLS) {
+            continue;
+        }
+#endif
         out[n++] = (uint8_t)i;
     }
     return n;
@@ -2827,7 +2835,13 @@ int Port_SecondScreen_HasSurface(void) {
     return has;
 }
 
-#else /* !__ANDROID__ — no second display; surface entry points are no-ops
+#elif defined(PORT_SS_LINUX)
+
+/* Linux dual-screen handhelds: the SDL window, paint thread and touchscreen
+ * reader live in port_second_screen_linux.c; it renders through
+ * Port_SecondScreen_PaintInto/OnTap above like the Android thread does. */
+
+#else /* no second display; surface entry points are no-ops
        * (the compositor + tap handler above still compile and run, which
        * is what the host harness drives). */
 

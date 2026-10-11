@@ -93,6 +93,16 @@ option("widescreen_width")
     set_description("MODE1_GBA_WIDTH (240=native, >240=stretched until Phase 2)")
 option_end()
 
+-- Linux dual-screen handhelds (ROCKNIX on the Anbernic RG DS / RG DS Plus):
+-- hosts the second-screen panel in its own SDL window on the other output
+-- and reads taps from that panel's touchscreen. See
+-- port/port_second_screen_linux.c and ports/rocknix/.
+option("dual_screen")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Linux: show the second-screen panel on a second display (RG DS / RG DS Plus)")
+option_end()
+
 -- Build directories
 local build_dir = "build/$(plat)"
 -- Host build utilities (asset_processor, gbagfx, preproc, ...). They exist to
@@ -165,7 +175,31 @@ end
 -- Third-party packages
 -- ====================
 local use_system_packages = is_host("linux") and (os.getenv("XMAKE_USE_SYSTEM_SDL3") or os.getenv("IN_NIX_SHELL"))
-if use_system_packages then
+-- Linux dual-screen handheld builds (ROCKNIX) link the device's own SDL3:
+-- ROCKNIX ships it built for its compositor and GPU stack, and the game and
+-- ImGui's SDL backend must share that one library. These are cross builds,
+-- where xmake won't look up "system" packages, so this project-local
+-- package points both at an SDL3 prefix (headers + libSDL3.so to link
+-- against; nothing from it is shipped). Set SDL3_PREFIX to that prefix.
+local handheld_sdl3 = is_plat("linux") and has_config("dual_screen")
+if handheld_sdl3 then
+    package("libsdl3")
+        set_kind("library")
+        on_fetch(function (package)
+            local prefix = os.getenv("SDL3_PREFIX") or "/usr"
+            local inc = path.join(prefix, "include")
+            if not os.isfile(path.join(inc, "SDL3", "SDL.h")) then
+                raise("dual_screen build: no SDL3 headers under " .. inc .. " (set SDL3_PREFIX)")
+            end
+            return {includedirs = inc, linkdirs = path.join(prefix, "lib"), links = "SDL3"}
+        end)
+    package_end()
+end
+if handheld_sdl3 then
+    add_requires("nlohmann_json", {configs = {cmake = false}})
+    add_requires("fmt", {system = false, configs = {header_only = true}})
+    add_requires("libsdl3")
+elseif use_system_packages then
     add_requires("nlohmann_json", {system = true, configs = {cmake = false}})
     add_requires("fmt", {configs = {header_only = true}})
     add_requires("libsdl3", {system = true})
@@ -185,7 +219,9 @@ else
     -- NoSuchMethodError at registration). Bump BOTH together.
     add_requires("libsdl3 3.4.12", {configs = {shared = false}})
 end
-add_requires("guilite")
+if not handheld_sdl3 then
+    add_requires("guilite") -- only the private Modern Launcher uses it
+end
 
 -- libpng + zlib are linked by port_bugreport (F9 screenshot codec) and
 -- by gbagfx (build-time PNG codec). On Linux + macOS we have system
@@ -197,7 +233,7 @@ add_requires("guilite")
 if is_plat("mingw", "windows") then
     add_requires("libpng")
     add_requires("zlib")
-elseif is_plat("android") then
+elseif is_plat("android") or handheld_sdl3 then
     -- NDK triplet has no system packages; build both from source (small,
     -- cross-compile cleanly).
     add_requires("libpng", {system = false})
@@ -230,7 +266,10 @@ end
 -- builds (SDL_GPU). The two backends are mutually exclusive at runtime
 -- — port_imgui_menu.cpp picks via TMC_GPU_RENDERER define — but the
 -- compiled package needs both files available.
-add_requires("imgui v1.92.7", {configs = {sdl3 = true, sdl3_renderer = true, sdl3_gpu = true}})
+if not handheld_sdl3 then
+    add_requires("imgui v1.92.7", {configs = {sdl3 = true, sdl3_renderer = true, sdl3_gpu = true}})
+end
+
 
 -- #15: even with `header_only = true` requested above, the xmake fmt
 -- package still links the system libfmt.so when one happens to be
@@ -867,6 +906,15 @@ target("tmc_pc")
     add_files("port/port_second_screen_dungeonmap.c") -- Authentic dungeon-map art for the second screen
     add_files("port/port_second_screen_quest.c") -- Quest-status screen art for the second screen
     add_files("port/port_second_screen_theme.c") -- TMC menu chrome / HUD art for the second screen, decoded from ROM
+    if is_plat("linux") and has_config("dual_screen") then
+        add_files("port/port_second_screen_linux.c") -- SDL window + evdev touch host for the panel
+        add_defines("PORT_DUAL_SCREEN_LINUX")
+        add_syslinks("pthread", "dl", "rt") -- glibc < 2.34 keeps dladdr / shm_open out of libc
+        -- Self-contained C++ runtime: the binary runs on whatever libstdc++
+        -- the handheld's distro ships (ROCKNIX's is newer than a portable
+        -- build toolchain's, but never guaranteed to match it).
+        add_ldflags("-static-libstdc++", "-static-libgcc", {force = true})
+    end
     if is_plat("android") then
         -- JNI bridge only — references <jni.h>/<android/native_window_jni.h>,
         -- doesn't compile on other platforms.
@@ -993,7 +1041,19 @@ target("tmc_pc")
     -- PNG encoding. imgui drives the F8/ribbon menus (HEAD).
     -- guilite is matheo's mobile/touch UI overlay.
     -- Keep all of them so both UI stacks build cleanly.
-    add_packages("libsdl3", "nlohmann_json", "fmt", "libpng", "zlib", "imgui", "guilite")
+    if handheld_sdl3 then
+        -- ImGui compiled in directly so its SDL3 backends build against the
+        -- device SDL3 (the imgui package would pull in its own SDL). Needs an
+        -- ImGui v1.92.7 checkout at $IMGUI_DIR (default libs/imgui).
+        local imgui_dir = os.getenv("IMGUI_DIR") or "libs/imgui"
+        add_includedirs(imgui_dir)
+        add_files(path.join(imgui_dir, "imgui*.cpp"))
+        add_files(path.join(imgui_dir, "backends/imgui_impl_sdl3.cpp"))
+        add_files(path.join(imgui_dir, "backends/imgui_impl_sdlrenderer3.cpp"))
+        add_packages("libsdl3", "nlohmann_json", "fmt", "libpng", "zlib")
+    else
+        add_packages("libsdl3", "nlohmann_json", "fmt", "libpng", "zlib", "imgui", "guilite")
+    end
 
 
     -- Build a standalone Windows binary with MinGW (static SDL + runtimes).

@@ -543,7 +543,7 @@ int main(int argc, char* argv[]) {
         window_flags |= SDL_WINDOW_VULKAN;
     }
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX)
     /* No windowed mode on a handheld — request fullscreen at creation time
      * rather than toggling after the fact. SDL's Android backend sizes the
      * native window to the requested w/h and only syncs system-bar/immersive
@@ -562,7 +562,7 @@ int main(int argc, char* argv[]) {
 #else
     {
         SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX)
         window_flags |= SDL_WINDOW_FULLSCREEN;
 #endif
         if (!SDL_CreateWindowAndRenderer(window_title, window_base_width * window_scale, MODE1_GBA_HEIGHT * window_scale,
@@ -692,14 +692,14 @@ int main(int argc, char* argv[]) {
         romPath = Port_FindBaseRomPath();
         bool done = false;
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX)
         /* The Android package keeps its ROM in app storage, so once that
          * file exists there is nothing useful to choose on every launch.
          * Keep the picker available for a missing-ROM first run — and for
          * a ROM that turned out not to load, which is the only way back
          * to the picker on a device with no reachable file manager. */
         if (romPath && !romLoadFailed) {
-            fprintf(stderr, "Prelaunch: Android ROM detected — skipping menu.\n");
+            fprintf(stderr, "Prelaunch: handheld ROM detected — skipping menu.\n");
             done = true;
         }
 #endif

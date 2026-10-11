@@ -1,8 +1,9 @@
 #include "port_second_screen_state.h"
+#include "port_second_screen_platform.h"
 
 #include <string.h>
 
-#ifdef __ANDROID__
+#if PORT_SS_LIVE
 
 #include <pthread.h>
 
@@ -261,7 +262,7 @@ void Port_SecondScreenState_RequestEquip(uint8_t itemId, uint8_t slot) {
     pthread_mutex_unlock(&sSnapshotMutex);
 }
 
-#else /* !__ANDROID__ — no second-screen thread to publish to. */
+#else /* !PORT_SS_LIVE — no second-screen thread to publish to. */
 
 void Port_SecondScreenState_Publish(void) {}
 

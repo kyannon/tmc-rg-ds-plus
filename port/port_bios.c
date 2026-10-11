@@ -26,6 +26,7 @@
 #include <math.h>
 #include <setjmp.h>
 #include "port_repro.h"
+#include "port_second_screen.h"
 
 static bool gQuitRequested = false;
 static bool sFastForward = false;
@@ -217,6 +218,13 @@ static void Port_UpdateInput(void) {
 static void Port_PumpEvents(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+#ifdef PORT_SECOND_SCREEN_LINUX_HOST
+        /* The bottom panel's own window: its taps and lifecycle are the
+         * panel's, never the game's or ImGui's. */
+        if (Port_SecondScreen_LinuxHandleEvent(&e)) {
+            continue;
+        }
+#endif
         /* Forward every event to ImGui so its window/keyboard tracking
          * stays in sync. ImGui only consumes input when a widget is
          * actively hovered/focused; game input passes through. */
@@ -507,6 +515,11 @@ static void Port_PumpEvents(void) {
             Port_OpenInGameSettingsModal();
         }
     }
+
+#ifdef PORT_SECOND_SCREEN_LINUX_HOST
+    /* Bottom panel: present the newest frame the paint thread finished. */
+    Port_SecondScreen_LinuxPump();
+#endif
 }
 
 static u64 lastFrameNs = 0;

@@ -8,7 +8,10 @@
 
 #include "port_gpu_raster_gl.h"
 
-#if defined(__ANDROID__) || defined(__linux__)
+/* Only with the GPU renderer compiled in: that is also the only build that
+ * links EGL/GLESv2 (xmake.lua), so a --gpu_renderer=n Linux build takes the
+ * stubs below instead of failing on <EGL/egl.h> / unresolved egl* symbols. */
+#if (defined(__ANDROID__) || defined(__linux__)) && defined(TMC_GPU_RENDERER)
 #define TMC_GLES_RASTER_IMPL 1
 #endif
 
