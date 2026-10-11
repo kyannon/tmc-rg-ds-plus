@@ -20,6 +20,8 @@
 #include "../port/port_second_screen_linux.c"
 
 static int gPaints = 0, gTaps = 0, gLastX = -1, gLastY = -1, gLastLong = -1;
+/* 0: every pixel changes each paint; 1: static frame; 2: only rows 100..109 change */
+static volatile int gPaintMode = 0;
 static int gFails = 0;
 
 #define CHECK(cond, ...)                                                                                             \
@@ -38,9 +40,11 @@ static int gFails = 0;
 void Port_SecondScreen_PaintInto(uint32_t* pixels, int width, int height, int stride, const SecondScreenSnapshot* snap,
                                  uint32_t tick) {
     (void)snap;
+    int mode = gPaintMode;
     for (int y = 0; y < height; y++) {
+        int animate = mode == 0 || (mode == 2 && y >= 100 && y < 110);
         for (int x = 0; x < width; x++) {
-            pixels[y * stride + x] = 0xFF000000u | (uint32_t)((x ^ y ^ (int)tick) & 0xFF);
+            pixels[y * stride + x] = 0xFF000000u | (uint32_t)((x ^ y ^ (animate ? (int)tick : 0)) & 0xFF);
         }
     }
     __atomic_add_fetch(&gPaints, 1, __ATOMIC_SEQ_CST);
@@ -104,6 +108,81 @@ int main(void) {
           atomic_load(&sPaintedW), atomic_load(&sPaintedH));
     CHECK(sPanelTex != NULL && sTexW == pw && sTexH == ph, "streaming texture matches (%dx%d)", sTexW, sTexH);
     CHECK(SDL_GetRendererName(sPanelRen) != NULL, "renderer: %s", SDL_GetRendererName(sPanelRen));
+
+    printf("[1b] upload only what changed, in slices\n");
+    {
+        /* Settle on a static frame, then measure what crosses to the GPU. */
+        gPaintMode = 1;
+        PumpFor(400);
+        sStatUploadRows = sStatUploadN = sStatPresentN = 0;
+        PumpFor(500);
+        CHECK(sStatUploadRows == 0 && sStatPresentN == 0, "static panel: 0 rows uploaded, 0 presents (got %llu, %llu)",
+              (unsigned long long)sStatUploadRows, (unsigned long long)sStatPresentN);
+
+        gPaintMode = 2;
+        PumpFor(150);
+        sStatUploadRows = sStatUploadN = sStatPresentN = 0;
+        PumpFor(500);
+        CHECK(sStatPresentN > 0 && sStatUploadRows == sStatPresentN * 10,
+              "10 changed rows: %llu rows over %llu presents (10 each)", (unsigned long long)sStatUploadRows,
+              (unsigned long long)sStatPresentN);
+
+        gPaintMode = 0;
+        PumpFor(150);
+        sStatUploadRows = sStatUploadN = sStatPresentN = 0;
+        uint64_t maxRows = 0;
+        int maxSlices = 0, slices = 0;
+        uint64_t end = NowMs() + 600;
+        while (NowMs() < end) {
+            uint64_t before = sStatUploadRows, presBefore = sStatPresentN;
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                Port_SecondScreen_LinuxHandleEvent(&ev);
+            }
+            Port_SecondScreen_LinuxPump();
+            uint64_t d = sStatUploadRows - before;
+            if (d > maxRows) maxRows = d;
+            if (d) slices++;
+            if (sStatPresentN != presBefore) {
+                if (slices > maxSlices) maxSlices = slices;
+                slices = 0;
+            }
+            SDL_Delay(16);
+        }
+        CHECK(maxRows <= (uint64_t)(ph + 2) / 3, "full change: at most %d rows per game frame (max %llu)",
+              (ph + 2) / 3, (unsigned long long)maxRows);
+        CHECK(sStatPresentN > 0 && maxSlices == 3, "full change: 3 slices then one present (%d), %llu presents",
+              maxSlices, (unsigned long long)sStatPresentN);
+        CHECK(sStatUploadRows >= sStatPresentN * (uint64_t)ph && sStatUploadRows < (sStatPresentN + 1) * (uint64_t)ph,
+              "every presented frame was fully uploaded (%llu rows / %llu presents)",
+              (unsigned long long)sStatUploadRows, (unsigned long long)sStatPresentN);
+
+        /* After a run of partial (banded) uploads, the texture must be
+         * pixel-identical to the frame that was last presented. */
+        gPaintMode = 2;
+        PumpFor(700);
+        for (int i = 0; i < 10 && sPending; i++) {
+            Port_SecondScreen_LinuxPump();
+        }
+        SDL_RenderClear(sPanelRen);
+        SDL_RenderTexture(sPanelRen, sPanelTex, NULL, NULL);
+        SDL_Surface* shot = SDL_RenderReadPixels(sPanelRen, NULL);
+        int mismatch = -1;
+        if (shot) {
+            SDL_Surface* conv = SDL_ConvertSurface(shot, SDL_PIXELFORMAT_ABGR8888);
+            for (int y = 0; conv && y < conv->h && mismatch < 0; y++) {
+                const uint32_t* row = (const uint32_t*)((const uint8_t*)conv->pixels + (size_t)y * conv->pitch);
+                if (memcmp(row, sUpload.px + (size_t)y * sUpload.w, (size_t)sUpload.w * 4) != 0) {
+                    mismatch = y;
+                }
+            }
+            if (conv && mismatch < 0) mismatch = -2; /* all rows equal */
+            SDL_DestroySurface(conv);
+            SDL_DestroySurface(shot);
+        }
+        CHECK(!sPending && mismatch == -2, "texture == last presented frame after banded uploads (first bad row %d)",
+              mismatch);
+    }
 
     printf("[2] SDL taps on the panel window\n");
     SDL_Event e;

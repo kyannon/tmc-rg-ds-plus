@@ -193,7 +193,7 @@ static AgbplaySoundMode MakeAgbplayMode(void) {
      * NEAREST's raw aliasing, so the enhanced path stays smooth on Android while
      * fitting the CPU budget. Desktop keeps SINC (the cleanest resampler; cost is
      * irrelevant there). GBA-accurate mode is NEAREST everywhere (hardware exact). */
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX) /* + RK3568 (Cortex-A55, in-order) */
     const ResamplerType enhancedRs = ResamplerType::LINEAR;
 #else
     const ResamplerType enhancedRs = ResamplerType::SINC;
@@ -919,7 +919,7 @@ void Port_M4A_Backend_SetGbaAccurate(bool accurate) {
      * is captured into each ReverbEffect's cached intensity, refreshed only by
      * SoundMixer::UpdateReverb() — so set the field AND call UpdateReverb() to
      * apply it live. MakeAgbplayMode also honours these on a later rebuild. */
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX)
     const ResamplerType rs = accurate ? ResamplerType::NEAREST : ResamplerType::LINEAR;
 #else
     const ResamplerType rs = accurate ? ResamplerType::NEAREST : ResamplerType::SINC;

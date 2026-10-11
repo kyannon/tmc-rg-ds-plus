@@ -49,9 +49,26 @@ struct Def {
     std::initializer_list<const char*> binds;
 };
 
+/* SDL gamepad buttons are positional (SOUTH = bottom face button). On
+ * Nintendo-layout handhelds the labels sit the other way round: the RG DS
+ * family's kernel driver reports the button printed "A" (right) as
+ * BTN_EAST and "B" (bottom) as BTN_SOUTH, "X" (top) as BTN_NORTH and "Y"
+ * (left) as BTN_WEST. Bind by label there, so A is A. */
+#ifdef PORT_DUAL_SCREEN_LINUX
+#define PORT_PAD_A "SDL_GAMEPAD:0x00000001"      /* EAST  */
+#define PORT_PAD_B "SDL_GAMEPAD:0x00000000"      /* SOUTH */
+#define PORT_PAD_SOFT_X "SDL_GAMEPAD:0x00000003" /* NORTH */
+#define PORT_PAD_SOFT_Y "SDL_GAMEPAD:0x00000002" /* WEST  */
+#else
+#define PORT_PAD_A "SDL_GAMEPAD:0x00000000"      /* SOUTH */
+#define PORT_PAD_B "SDL_GAMEPAD:0x00000001"      /* EAST  */
+#define PORT_PAD_SOFT_X "SDL_GAMEPAD:0x00000002" /* WEST  */
+#define PORT_PAD_SOFT_Y "SDL_GAMEPAD:0x00000003" /* NORTH */
+#endif
+
 const std::array<Def, PORT_INPUT_COUNT> kDefaults = { {
-    { PORT_INPUT_A, "a", { "SDLK:0x00000078", "SDL_GAMEPAD:0x00000000" } },
-    { PORT_INPUT_B, "b", { "SDLK:0x0000007a", "SDL_GAMEPAD:0x00000001" } },
+    { PORT_INPUT_A, "a", { "SDLK:0x00000078", PORT_PAD_A } },
+    { PORT_INPUT_B, "b", { "SDLK:0x0000007a", PORT_PAD_B } },
     { PORT_INPUT_SELECT, "select", { "SDLK:0x00000008", "SDL_GAMEPAD:0x00000004" } },
     { PORT_INPUT_START, "start", { "SDLK:0x0000000d", "SDL_GAMEPAD:0x00000006" } },
     { PORT_INPUT_RIGHT, "right", { "SDLK:0x4000004f", "SDL_GAMEPAD:0x0000000e" } },
@@ -63,8 +80,8 @@ const std::array<Def, PORT_INPUT_COUNT> kDefaults = { {
     /* Soft-slots: keyboard CV/QE + face-buttons WEST/NORTH + triggers L2/R2.
      * Numeric values: SDL_GAMEPAD_BUTTON_WEST=2, NORTH=3,
      * SDL_GAMEPAD_AXIS_LEFT_TRIGGER=4, RIGHT_TRIGGER=5. */
-    { PORT_INPUT_SOFT_X, "soft_x", { "SDLK:0x00000063", "SDL_GAMEPAD:0x00000002" } },
-    { PORT_INPUT_SOFT_Y, "soft_y", { "SDLK:0x00000076", "SDL_GAMEPAD:0x00000003" } },
+    { PORT_INPUT_SOFT_X, "soft_x", { "SDLK:0x00000063", PORT_PAD_SOFT_X } },
+    { PORT_INPUT_SOFT_Y, "soft_y", { "SDLK:0x00000076", PORT_PAD_SOFT_Y } },
     { PORT_INPUT_SOFT_L2, "soft_l2", { "SDLK:0x00000071", "SDL_AXIS:0x00000004" } },
     { PORT_INPUT_SOFT_R2, "soft_r2", { "SDLK:0x00000065", "SDL_AXIS:0x00000005" } },
     /* Roll attack: keyboard D + R3 (right stick click). R3 is unused by the
@@ -444,6 +461,9 @@ nlohmann::json DefaultsJson(void) {
 #endif
     /* reborn_features is intentionally absent — its presence is the signal
      * to override the compile-time feature defaults. */
+#ifdef PORT_DUAL_SCREEN_LINUX
+    j["handheld_face_layout"] = true; /* defaults above are already label-bound */
+#endif
     j["bindings"] = nlohmann::json::object();
     for (const auto& d : kDefaults) {
         j["bindings"][d.name] = nlohmann::json::array();
@@ -731,6 +751,37 @@ extern "C" void Port_Config_Load(const char* path) {
     } else {
         std::ofstream(p) << j.dump(4) << '\n';
     }
+
+#ifdef PORT_DUAL_SCREEN_LINUX
+    /* One-time fix for configs written by the first handheld build, which
+     * used the positional (Xbox) face-button defaults: A on the button
+     * labelled B, and X/Y likewise crossed. Swap exactly the stored
+     * SOUTH<->EAST and WEST<->NORTH gamepad tokens of those four actions —
+     * anything the player rebound to another button is left alone. */
+    if (!j.value("handheld_face_layout", false)) {
+        auto swapTok = [&j](const char* name, const char* from, const char* to) {
+            if (!j.contains("bindings") || !j["bindings"].is_object() || !j["bindings"].contains(name) ||
+                !j["bindings"][name].is_array()) {
+                return;
+            }
+            for (auto& t : j["bindings"][name]) {
+                if (t.is_string() && t.get<std::string>() == from) {
+                    t = to;
+                }
+            }
+        };
+        swapTok("a", "SDL_GAMEPAD:0x00000000", "SDL_GAMEPAD:0x00000001");
+        swapTok("b", "SDL_GAMEPAD:0x00000001", "SDL_GAMEPAD:0x00000000");
+        swapTok("soft_x", "SDL_GAMEPAD:0x00000002", "SDL_GAMEPAD:0x00000003");
+        swapTok("soft_y", "SDL_GAMEPAD:0x00000003", "SDL_GAMEPAD:0x00000002");
+        j["handheld_face_layout"] = true;
+        try {
+            std::ofstream(p) << j.dump(4) << '\n';
+        } catch (...) {
+        }
+        fprintf(stderr, "[CONFIG] handheld: face buttons bound by label (A=EAST, B=SOUTH, X=NORTH, Y=WEST)\n");
+    }
+#endif
 
     sConfigJson = j;
 

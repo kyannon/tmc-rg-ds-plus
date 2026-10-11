@@ -46,6 +46,13 @@
  *   TMC_PANEL_WINDOWED=1    don't make the panel fullscreen.
  *   TMC_PANEL_SCALE=n       paint at 1/n of the panel's pixel size and let
  *                           the GPU scale up (nearest). Default 1.
+ *   TMC_PANEL_UPLOAD_ROWS=n rows of the panel texture uploaded per game
+ *                           frame (only changed rows are sent at all).
+ *                           Default: a third of the panel, so one panel
+ *                           frame spreads over the three game frames it
+ *                           spans at 20 Hz / 60 Hz.
+ *   TMC_PANEL_NICE=n        paint thread niceness. Default 10 (yields to
+ *                           the game's PPU workers and audio).
  *   TMC_PANEL_TOUCH=auto|sdl|/dev/input/eventN
  *                           auto (default): find the touchscreen whose
  *                           sysfs path contains TMC_PANEL_TOUCH_MATCH.
@@ -82,6 +89,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -101,11 +110,31 @@ typedef struct {
 
 static pthread_mutex_t sBufMutex = PTHREAD_MUTEX_INITIALIZER;
 static PanelBuf sBack;   /* paint thread only */
+static PanelBuf sPrev;   /* paint thread only: copy of the last painted frame, for the diff */
 static PanelBuf sReady;  /* shared, under sBufMutex */
 static PanelBuf sUpload; /* main thread only */
 static int sReadyNew = 0;     /* under sBufMutex */
+/* Rows of sReady that differ from the frame the main thread last took,
+ * [y0, y1); y0 >= y1 = identical. Accumulated across every frame painted
+ * since that hand-off, so skipping frames never skips their changes. */
+static int sReadyY0 = 0, sReadyY1 = 0; /* under sBufMutex */
 static int sTargetW = 0;      /* under sBufMutex: size the paint thread should paint at */
 static int sTargetH = 0;
+
+/* Main thread: the frame currently being moved into the texture. Its dirty
+ * band is uploaded a slice per game frame and presented once complete, so
+ * no single game frame pays for a whole 1024x768 upload (Mali re-tiles
+ * texture uploads on the CPU; a full one per panel frame cost the game its
+ * vsync every third frame — 45 FPS). */
+static bool sPending = false;
+static int sPendY = 0, sPendY1 = 0;
+static int sRowsPerPump = 0; /* 0 = auto: a third of the panel */
+
+/* Timing, logged every PANEL_STATS_SECONDS. Paint side is written by the
+ * paint thread only, upload side by the main thread only. */
+#define PANEL_STATS_SECONDS 10
+static atomic_uint_fast64_t sStatPaintUs, sStatPaintN, sStatDirtyRows;
+static uint64_t sStatUploadUs, sStatUploadN, sStatPresentUs, sStatPresentN, sStatUploadRows, sStatWindowStart;
 
 /* Tap coordinate space = size of the most recently painted frame (that is
  * what the compositor captured its hit boxes in). */
@@ -160,11 +189,44 @@ static bool EnsureCapacity(PanelBuf* b, int w, int h) {
     return true;
 }
 
+static uint64_t NowUs(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+}
+
+/* Rows [y0, y1) where `cur` differs from `prev`; copies them into prev.
+ * Returns y0 >= y1 when the frames are identical. */
+static void DiffRows(const PanelBuf* cur, PanelBuf* prev, int* y0, int* y1) {
+    const size_t rowBytes = (size_t)cur->w * sizeof(uint32_t);
+    int first = -1, last = -1;
+    for (int y = 0; y < cur->h; y++) {
+        const uint32_t* a = cur->px + (size_t)y * (size_t)cur->w;
+        uint32_t* b = prev->px + (size_t)y * (size_t)cur->w;
+        if (memcmp(a, b, rowBytes) != 0) {
+            memcpy(b, a, rowBytes);
+            if (first < 0) {
+                first = y;
+            }
+            last = y;
+        }
+    }
+    *y0 = first < 0 ? 0 : first;
+    *y1 = first < 0 ? 0 : last + 1;
+}
+
 static void* PaintThreadMain(void* arg) {
     (void)arg;
     uint32_t tick = 0;
     const uint64_t periodMs = 1000 / PANEL_PAINT_HZ;
-    fprintf(stderr, "[second_screen] paint thread started\n");
+
+    /* Below the game: when a core is contended, the PPU workers and the
+     * audio synth win and the panel just paints a little later. */
+    int nice = EnvInt("TMC_PANEL_NICE", 10);
+    if (setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nice) != 0) {
+        fprintf(stderr, "[second_screen] paint thread: setpriority(%d) failed: %s\n", nice, strerror(errno));
+    }
+    fprintf(stderr, "[second_screen] paint thread started (nice %d)\n", nice);
 
     for (;;) {
         uint64_t start = NowMs();
@@ -176,16 +238,45 @@ static void* PaintThreadMain(void* arg) {
             pthread_mutex_unlock(&sBufMutex);
 
             if (w > 0 && h > 0 && EnsureCapacity(&sBack, w, h)) {
+                uint64_t t0 = NowUs();
                 SecondScreenSnapshot snap;
                 Port_SecondScreenState_Read(&snap);
                 Port_SecondScreen_PaintInto(sBack.px, w, h, w, &snap, ++tick);
                 atomic_store(&sPaintedW, w);
                 atomic_store(&sPaintedH, h);
 
+                int y0 = 0, y1 = h;
+                if (sPrev.w != w || sPrev.h != h || !sPrev.px) {
+                    /* New size: everything is new. Seed the diff copy. */
+                    if (EnsureCapacity(&sPrev, w, h)) {
+                        memcpy(sPrev.px, sBack.px, (size_t)w * (size_t)h * sizeof(uint32_t));
+                    }
+                } else {
+                    DiffRows(&sBack, &sPrev, &y0, &y1);
+                }
+                atomic_fetch_add(&sStatPaintUs, NowUs() - t0);
+                atomic_fetch_add(&sStatPaintN, 1);
+                atomic_fetch_add(&sStatDirtyRows, (uint64_t)(y1 > y0 ? y1 - y0 : 0));
+
                 pthread_mutex_lock(&sBufMutex);
                 PanelBuf t = sReady;
                 sReady = sBack;
                 sBack = t;
+                if (sReadyNew) {
+                    /* Not taken yet: widen the band to cover both frames. */
+                    if (y1 > y0) {
+                        if (sReadyY1 <= sReadyY0) {
+                            sReadyY0 = y0;
+                            sReadyY1 = y1;
+                        } else {
+                            if (y0 < sReadyY0) sReadyY0 = y0;
+                            if (y1 > sReadyY1) sReadyY1 = y1;
+                        }
+                    }
+                } else {
+                    sReadyY0 = y0;
+                    sReadyY1 = y1;
+                }
                 sReadyNew = 1;
                 pthread_mutex_unlock(&sBufMutex);
             }
@@ -588,15 +679,46 @@ static void DestroyPanelWindow(void) {
     }
     sPanelWinId = 0;
     sTexW = sTexH = 0;
+    sPending = false;
     fprintf(stderr, "[second_screen] panel window closed\n");
 }
 
 void Port_SecondScreen_Init(void) {
+    sRowsPerPump = EnvInt("TMC_PANEL_UPLOAD_ROWS", 0);
+    if (sRowsPerPump < 0) {
+        sRowsPerPump = 0;
+    }
     sPaintScale = EnvInt("TMC_PANEL_SCALE", 1);
     if (sPaintScale < 1) {
         sPaintScale = 1;
     }
     fprintf(stderr, "[second_screen] init (Linux dual-screen); panel opens with the first game frame\n");
+}
+
+/* One line every PANEL_STATS_SECONDS so log.txt shows what the panel
+ * costs on the device: paint (paint thread), upload + present (game thread). */
+static void PanelStatsMaybeLog(void) {
+    uint64_t now = NowUs();
+    if (sStatWindowStart == 0) {
+        sStatWindowStart = now;
+        return;
+    }
+    if (now - sStatWindowStart < (uint64_t)PANEL_STATS_SECONDS * 1000000u) {
+        return;
+    }
+    uint64_t pn = atomic_exchange(&sStatPaintN, 0);
+    uint64_t pus = atomic_exchange(&sStatPaintUs, 0);
+    uint64_t dirty = atomic_exchange(&sStatDirtyRows, 0);
+    fprintf(stderr,
+            "[second_screen] %ds: %llu paints avg %.1f ms (%.0f dirty rows avg) | %llu uploads avg %.2f ms "
+            "(%.0f rows avg) | %llu presents avg %.2f ms\n",
+            PANEL_STATS_SECONDS, (unsigned long long)pn, pn ? pus / 1000.0 / pn : 0.0,
+            pn ? (double)dirty / pn : 0.0, (unsigned long long)sStatUploadN,
+            sStatUploadN ? sStatUploadUs / 1000.0 / sStatUploadN : 0.0,
+            sStatUploadN ? (double)sStatUploadRows / sStatUploadN : 0.0, (unsigned long long)sStatPresentN,
+            sStatPresentN ? sStatPresentUs / 1000.0 / sStatPresentN : 0.0);
+    sStatUploadUs = sStatUploadN = sStatPresentUs = sStatPresentN = sStatUploadRows = 0;
+    sStatWindowStart = now;
 }
 
 void Port_SecondScreen_LinuxPump(void) {
@@ -627,21 +749,27 @@ void Port_SecondScreen_LinuxPump(void) {
     }
     int tw = pw / sPaintScale, th = ph / sPaintScale;
 
-    bool got = false;
     pthread_mutex_lock(&sBufMutex);
     sTargetW = tw;
     sTargetH = th;
-    if (sReadyNew) {
+    /* Take a new frame only between uploads: the one in flight is read
+     * straight out of sUpload until its last slice is in the texture. */
+    if (!sPending && sReadyNew) {
         PanelBuf t = sUpload;
         sUpload = sReady;
         sReady = t;
         sReadyNew = 0;
-        got = true;
+        sPending = true;
+        sPendY = sReadyY0;
+        sPendY1 = sReadyY1;
+        sReadyY0 = sReadyY1 = 0;
     }
     pthread_mutex_unlock(&sBufMutex);
     atomic_store(&sActive, 1);
 
-    if (!got || !sUpload.px) {
+    PanelStatsMaybeLog();
+
+    if (!sPending || !sUpload.px) {
         return;
     }
 
@@ -662,15 +790,50 @@ void Port_SecondScreen_LinuxPump(void) {
             sTexW = sUpload.w;
             sTexH = sUpload.h;
         }
+        /* A fresh texture holds nothing: upload the whole frame. */
+        sPendY = 0;
+        sPendY1 = sUpload.h;
     }
-    if (sPanelTex) {
-        SDL_UpdateTexture(sPanelTex, NULL, sUpload.px, sUpload.w * (int)sizeof(uint32_t));
+    if (!sPanelTex) {
+        sPending = false;
+        goto restore;
+    }
+
+    if (sPendY < sPendY1) {
+        int rows = sRowsPerPump > 0 ? sRowsPerPump : (sUpload.h + 2) / 3;
+        int y1 = sPendY + rows;
+        if (y1 > sPendY1) {
+            y1 = sPendY1;
+        }
+        uint64_t t0 = NowUs();
+        SDL_Rect r = { 0, sPendY, sUpload.w, y1 - sPendY };
+        SDL_UpdateTexture(sPanelTex, &r, sUpload.px + (size_t)sPendY * (size_t)sUpload.w,
+                          sUpload.w * (int)sizeof(uint32_t));
+        sStatUploadUs += NowUs() - t0;
+        sStatUploadN++;
+        sStatUploadRows += (uint64_t)(y1 - sPendY);
+        sPendY = y1;
+        if (sPendY < sPendY1) {
+            goto restore; /* more slices next game frame */
+        }
+    } else {
+        /* Identical to what is on screen: nothing to upload or present. */
+        sPending = false;
+        goto restore;
+    }
+
+    {
+        uint64_t t0 = NowUs();
         SDL_SetRenderDrawColor(sPanelRen, 0, 0, 0, 255);
         SDL_RenderClear(sPanelRen);
         SDL_RenderTexture(sPanelRen, sPanelTex, NULL, NULL);
         SDL_RenderPresent(sPanelRen);
+        sStatPresentUs += NowUs() - t0;
+        sStatPresentN++;
     }
+    sPending = false;
 
+restore:
     if (prevCtx && SDL_GL_GetCurrentContext() != prevCtx) {
         SDL_GL_MakeCurrent(prevWin, prevCtx);
     }

@@ -53,7 +53,9 @@ The launcher writes `minishcapds/log.txt` on every run. Look for the
 | Bottom screen stays black | Look for `[second_screen] panel window …` in the log. If it says "only one display", sway has the bottom output disabled. Enable it in ROCKNIX's display settings. |
 | Taps do nothing | Check the `[second_screen] touch:` log line. If no touchscreen matched, run `ls -l /sys/class/input/event*/device` and set `TMC_PANEL_TOUCH_MATCH` (or `TMC_PANEL_TOUCH=/dev/input/eventN`) at the top of the launcher. |
 | Taps land in the wrong place | Set `TMC_PANEL_TOUCH_ROTATE=90/180/270`, `TMC_PANEL_TOUCH_FLIPX=1` or `TMC_PANEL_TOUCH_FLIPY=1` in the launcher. |
-| Panel feels slow | Set `TMC_PANEL_SCALE=2` to paint the panel at half resolution, scaled up by the GPU. |
+| Game below 60 FPS | `log.txt` prints `[perf] … FPS` every second and a `[second_screen]` timing line every 10 s (paint, upload and present costs). Send both. |
+| Audio crackles | Raise the buffer with `TMC_AUDIO_FRAMES=3072` (default 2048, about 43 ms). |
+| Battery life matters more than frame rate | `TMC_GOVERNOR=keep` leaves ROCKNIX's own CPU/GPU governor setting in charge instead of `performance`. |
 
 To set any of these, add a line such as `export TMC_PANEL_SCALE=2` near the
 top of `Minish Cap DS.sh`.
@@ -70,6 +72,12 @@ top of `Minish Cap DS.sh`.
   while the game runs (`fe5e0000.i2c`, the RG DS family's bottom panel).
   Taps work regardless of how sway maps the touch device. The device returns
   to sway when the game exits.
+- **Performance.** The RK3568 has four in-order cores shared by the music
+  synth, the PPU and the panel. The launcher pins CPU, memory and GPU
+  governors to `performance` while the game runs and restores them on exit.
+  The music synth runs on a realtime audio thread with the cheaper LINEAR
+  resampler. The panel paints at low priority, uploads only the rows that
+  changed, and spreads each upload over three game frames.
 - **Libraries.** The port links against ROCKNIX's own SDL3. It bundles only
   `libgomp.so.1`. Built against glibc 2.27, so it runs on any current
   ROCKNIX.

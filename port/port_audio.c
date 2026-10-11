@@ -6,6 +6,8 @@
 #include "port_debug_verbose.h"
 
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 enum {
     PORT_AUDIO_SAMPLE_RATE = 48000,
@@ -354,6 +356,31 @@ bool Port_Audio_Init(void) {
         SDL_snprintf(buf, sizeof(buf), "%d", frames);
         SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, buf);
         fprintf(stderr, "[audio] SAMPLE_FRAMES = %d (%.1f ms buffer)\n", frames,
+                1000.0 * frames / PORT_AUDIO_SAMPLE_RATE);
+    }
+#endif
+
+#ifdef PORT_DUAL_SCREEN_LINUX
+    /* RG DS family (RK3568, 4x in-order Cortex-A55): the agbplay synth runs in
+     * this stream's callback and needs a large share of one core, while the
+     * PPU fans out across all four and the second-screen panel paints on its
+     * own thread. Same mitigations as weak Android SoCs, applied always:
+     *   - a ~43 ms device buffer to ride out scheduling jitter
+     *   - SCHED_RR for SDL's audio thread (ROCKNIX ports run as root, so the
+     *     request is granted), letting the synth preempt the render threads
+     *     instead of underrunning behind them
+     * TMC_AUDIO_FRAMES=<n> overrides the buffer size. */
+    {
+        int frames = 2048;
+        const char* fenv = getenv("TMC_AUDIO_FRAMES");
+        if (fenv && *fenv && atoi(fenv) > 0) {
+            frames = atoi(fenv);
+        }
+        char buf[16];
+        SDL_snprintf(buf, sizeof(buf), "%d", frames);
+        SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, buf);
+        SDL_SetHint(SDL_HINT_THREAD_FORCE_REALTIME_TIME_CRITICAL, "1");
+        fprintf(stderr, "[audio] handheld: SAMPLE_FRAMES = %d (%.1f ms buffer), realtime audio thread\n", frames,
                 1000.0 * frames / PORT_AUDIO_SAMPLE_RATE);
     }
 #endif

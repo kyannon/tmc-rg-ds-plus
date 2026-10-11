@@ -34,9 +34,10 @@ if [ -f "$controlfolder/control.txt" ]; then
   get_controls
 fi
 
-# ROCKNIX's profile carries WAYLAND_DISPLAY / SWAYSOCK / SDL_VIDEODRIVER;
-# ports normally inherit it, but be sure when run from a bare shell.
-if [ -z "$SWAYSOCK" ] && [ -f /etc/profile ]; then
+# ROCKNIX's profile: WAYLAND_DISPLAY / SWAYSOCK / SDL_VIDEODRIVER, the device
+# quirks (DMC_FREQ, GPU_FREQ, QUIRK_DEVICE) and helper functions such as
+# set_cpu_gov. Variables may be inherited, functions never are, so source it.
+if ! type set_cpu_gov >/dev/null 2>&1 && [ -f /etc/profile ]; then
   # shellcheck disable=SC1091
   . /etc/profile
 fi
@@ -125,9 +126,40 @@ if [ -n "$BOTTOM" ]; then
   PLACER=$!
 fi
 
+# ---- Clocks ----------------------------------------------------------------
+# The RK3568 needs its full clocks for this one: the music synth, the PPU and
+# the panel share four in-order cores. Pin CPU, memory and GPU governors to
+# performance while the game runs and put back exactly what was set before.
+# TMC_GOVERNOR=keep leaves ROCKNIX's per-game setting alone; any other value
+# (ondemand, schedutil, ...) is used instead of performance.
+GOV_MODE="${TMC_GOVERNOR:-performance}"
+GOV_FILES=()
+GOV_SAVED=()
+if [ "$GOV_MODE" != "keep" ]; then
+  for f in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor \
+           ${DMC_FREQ:+"$DMC_FREQ/governor"} ${GPU_FREQ:+"$GPU_FREQ/governor"}; do
+    [ -r "$f" ] || continue
+    GOV_FILES+=("$f")
+    GOV_SAVED+=("$(cat "$f")")
+  done
+  if type set_cpu_gov >/dev/null 2>&1; then
+    set_cpu_gov "$GOV_MODE"
+    type set_dmc_gov >/dev/null 2>&1 && set_dmc_gov "$GOV_MODE"
+    type set_gpu_gov >/dev/null 2>&1 && set_gpu_gov "$GOV_MODE"
+  else
+    for f in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do
+      echo "$GOV_MODE" >"$f" 2>/dev/null
+    done
+  fi
+  echo "[launcher] governors -> $GOV_MODE (was: ${GOV_SAVED[*]:-unknown})"
+fi
+
 # ---- Run -------------------------------------------------------------------
 export LD_LIBRARY_PATH="$GAMEDIR/libs.aarch64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 [ -n "$sdl_controllerconfig" ] && export SDL_GAMECONTROLLERCONFIG="$sdl_controllerconfig"
+# The PPU's OpenMP workers: spin only briefly between frames so idle workers
+# don't sit on cores the audio synth and the panel need.
+export GOMP_SPINCOUNT="${GOMP_SPINCOUNT:-20000}"
 
 if [ -n "$GPTOKEYB" ]; then
   $GPTOKEYB "tmc_pc" &
@@ -138,6 +170,9 @@ chmod +x ./tmc_pc
 
 # ---- Restore ---------------------------------------------------------------
 [ -n "$PLACER" ] && kill "$PLACER" 2>/dev/null
+for i in "${!GOV_FILES[@]}"; do
+  echo "${GOV_SAVED[$i]}" >"${GOV_FILES[$i]}" 2>/dev/null
+done
 if [ -n "$BOTTOM" ]; then
   [ $BOTTOM_POWERED_BY_US -eq 1 ] && swaymsg output "$BOTTOM" power off >/dev/null
   [ $BOTTOM_ENABLED_BY_US -eq 1 ] && swaymsg output "$BOTTOM" disable >/dev/null

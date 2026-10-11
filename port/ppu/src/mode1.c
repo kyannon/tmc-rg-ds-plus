@@ -1521,7 +1521,16 @@ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
      * load instead of the rgb555->ABGR math. */
     virtuappu_mode1_publish_palette_luts();
 
+#if defined(PORT_DUAL_SCREEN_LINUX)
+    /* Handhelds where every core is shared with the audio synth and the
+     * second-screen panel: with a static split one preempted worker holds the
+     * whole frame hostage for its 40 lines. Small dynamic chunks let the
+     * other cores absorb its share. Lines are independent, so the output is
+     * byte-identical either way. */
+#pragma omp parallel for schedule(dynamic, 8)
+#else
 #pragma omp parallel for schedule(static)
+#endif
     for (line = 0; line < MODE1_GBA_HEIGHT; ++line) {
         /* Affine (mode 2) renders every scanline against the frame-start DISPCNT
          * (GBA latches BGMODE once per frame; matches the former mode2.c). The
