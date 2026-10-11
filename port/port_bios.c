@@ -1010,8 +1010,12 @@ void VBlankIntrWait(void) {
             SDL_snprintf(title, sizeof(title), "The Minish Cap " TMC_PORT_VERSION " - %.1f FPS", fps);
         }
         Port_PPU_SetWindowTitle(title);
-#if defined(__ANDROID__) || defined(PORT_DUAL_SCREEN_LINUX)
+#if defined(__ANDROID__)
         fprintf(stderr, "[perf] %.1f FPS\n", fps);
+#elif defined(PORT_DUAL_SCREEN_LINUX)
+        /* TPS = game-logic ticks: 60 with FPS low means frames were skipped
+         * but the game kept speed; both low means the game itself slowed. */
+        fprintf(stderr, "[perf] %.1f FPS / %.1f TPS\n", fps, decoupled ? tps : fps);
 #endif
 
         sFpsWindowStartNs = nowNs;

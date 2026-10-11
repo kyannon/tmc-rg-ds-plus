@@ -160,6 +160,9 @@ export LD_LIBRARY_PATH="$GAMEDIR/libs.aarch64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PAT
 # The PPU's OpenMP workers: spin only briefly between frames so idle workers
 # don't sit on cores the audio synth and the panel need.
 export GOMP_SPINCOUNT="${GOMP_SPINCOUNT:-20000}"
+# Frame-phase timings in log.txt every ~2 s: game logic, PPU raster and
+# present, average and worst. Two clock reads a frame; TMC_PROFILE=0 to drop.
+[ "${TMC_PROFILE:-1}" != "0" ] && export TMC_PROFILE=1 || unset TMC_PROFILE
 
 if [ -n "$GPTOKEYB" ]; then
   $GPTOKEYB "tmc_pc" &

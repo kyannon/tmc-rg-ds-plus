@@ -51,6 +51,8 @@
  *                           Default: a third of the panel, so one panel
  *                           frame spreads over the three game frames it
  *                           spans at 20 Hz / 60 Hz.
+ *   TMC_PANEL_ADAPTIVE=0    keep the panel at 20 Hz even while the game
+ *                           runs below 60 FPS (default: drop to 10 Hz).
  *   TMC_PANEL_NICE=n        paint thread niceness. Default 10 (yields to
  *                           the game's PPU workers and audio).
  *   TMC_PANEL_TOUCH=auto|sdl|/dev/input/eventN
@@ -215,10 +217,27 @@ static void DiffRows(const PanelBuf* cur, PanelBuf* prev, int* y0, int* y1) {
     *y1 = first < 0 ? 0 : last + 1;
 }
 
+/* The game's measured presents/second, refreshed once a second by the
+ * frame pacer (port_bios.c). 0 until the first second has passed. */
+extern double gPortPaceFps;
+
+/* Adaptive panel rate: the top screen comes first. While the game is
+ * presenting below ~58 FPS the panel paints at half rate (10 Hz), and it
+ * returns to 20 Hz after three steady seconds at 60. The compositor's
+ * tick advances by 2 per half-rate paint, so its tick-timed behavior
+ * (floor-preview return, map-zoom bracket) keeps wall-clock timing. */
+#define PANEL_SLOW_BELOW_FPS 57.5
+#define PANEL_FAST_ABOVE_FPS 59.5
+#define PANEL_FAST_AFTER_S 3
+static atomic_int sPanelSlow; /* read by the stats logger */
+
 static void* PaintThreadMain(void* arg) {
     (void)arg;
     uint32_t tick = 0;
-    const uint64_t periodMs = 1000 / PANEL_PAINT_HZ;
+    const bool adaptive = EnvInt("TMC_PANEL_ADAPTIVE", 1) != 0;
+    bool slow = false;
+    int goodSeconds = 0;
+    uint64_t lastEvalMs = NowMs();
 
     /* Below the game: when a core is contended, the PPU workers and the
      * audio synth win and the panel just paints a little later. */
@@ -230,6 +249,24 @@ static void* PaintThreadMain(void* arg) {
 
     for (;;) {
         uint64_t start = NowMs();
+        if (adaptive && start - lastEvalMs >= 1000) {
+            lastEvalMs = start;
+            double fps = *(volatile double*)&gPortPaceFps;
+            if (!slow && fps > 1.0 && fps < PANEL_SLOW_BELOW_FPS) {
+                slow = true;
+                goodSeconds = 0;
+                fprintf(stderr, "[second_screen] game at %.1f FPS: panel -> %d Hz\n", fps, PANEL_PAINT_HZ / 2);
+            } else if (slow) {
+                goodSeconds = fps >= PANEL_FAST_ABOVE_FPS ? goodSeconds + 1 : 0;
+                if (goodSeconds >= PANEL_FAST_AFTER_S) {
+                    slow = false;
+                    fprintf(stderr, "[second_screen] game steady at %.1f FPS: panel -> %d Hz\n", fps, PANEL_PAINT_HZ);
+                }
+            }
+            atomic_store(&sPanelSlow, slow ? 1 : 0);
+        }
+        const uint64_t periodMs = 1000 / (slow ? PANEL_PAINT_HZ / 2 : PANEL_PAINT_HZ);
+
         if (atomic_load(&sActive)) {
             int w, h;
             pthread_mutex_lock(&sBufMutex);
@@ -241,7 +278,8 @@ static void* PaintThreadMain(void* arg) {
                 uint64_t t0 = NowUs();
                 SecondScreenSnapshot snap;
                 Port_SecondScreenState_Read(&snap);
-                Port_SecondScreen_PaintInto(sBack.px, w, h, w, &snap, ++tick);
+                tick += slow ? 2 : 1;
+                Port_SecondScreen_PaintInto(sBack.px, w, h, w, &snap, tick);
                 atomic_store(&sPaintedW, w);
                 atomic_store(&sPaintedH, h);
 
@@ -711,12 +749,13 @@ static void PanelStatsMaybeLog(void) {
     uint64_t dirty = atomic_exchange(&sStatDirtyRows, 0);
     fprintf(stderr,
             "[second_screen] %ds: %llu paints avg %.1f ms (%.0f dirty rows avg) | %llu uploads avg %.2f ms "
-            "(%.0f rows avg) | %llu presents avg %.2f ms\n",
+            "(%.0f rows avg) | %llu presents avg %.2f ms | rate %d Hz\n",
             PANEL_STATS_SECONDS, (unsigned long long)pn, pn ? pus / 1000.0 / pn : 0.0,
             pn ? (double)dirty / pn : 0.0, (unsigned long long)sStatUploadN,
             sStatUploadN ? sStatUploadUs / 1000.0 / sStatUploadN : 0.0,
             sStatUploadN ? (double)sStatUploadRows / sStatUploadN : 0.0, (unsigned long long)sStatPresentN,
-            sStatPresentN ? sStatPresentUs / 1000.0 / sStatPresentN : 0.0);
+            sStatPresentN ? sStatPresentUs / 1000.0 / sStatPresentN : 0.0,
+            atomic_load(&sPanelSlow) ? PANEL_PAINT_HZ / 2 : PANEL_PAINT_HZ);
     sStatUploadUs = sStatUploadN = sStatPresentUs = sStatPresentN = sStatUploadRows = 0;
     sStatWindowStart = now;
 }

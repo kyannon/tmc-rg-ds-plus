@@ -117,7 +117,14 @@ float sTouchOpacity = 1.0f; /* multiplies every control's alpha  */
  * Anyone it does cost can turn it off in the panel's SETTINGS; the row is
  * hidden on native-240 builds, which ignore this flag entirely.
  * Console-Parity still forces it off. */
+#ifdef PORT_DUAL_SCREEN_LINUX
+/* RG DS family: the top screen is 4:3, so the 3:2 frame already fills its
+ * width; widescreen only letterboxes the picture smaller while rendering
+ * 60% more pixels on a CPU that needs every cycle. Still selectable. */
+bool sWidescreenEnabled = false;
+#else
 bool sWidescreenEnabled = true;
+#endif
 /* Console-Parity mode. When true the port suppresses every feature that
  * gives the player an edge over real GBA hardware, so a run is provably
  * console-equivalent: sub-frame input edge leniency off, save-states inert,
@@ -344,7 +351,11 @@ struct ScaleCfg {
 const BoolCfg kBoolCfg[] = {
     { "port_settings_menu", &sPortSettingsMenuEnabled, true },
     { "autosave_enabled", &sAutosaveEnabled, true },
+#ifdef PORT_DUAL_SCREEN_LINUX
+    { "widescreen_enabled", &sWidescreenEnabled, false },
+#else
     { "widescreen_enabled", &sWidescreenEnabled, true },
+#endif
     { "console_parity", &sConsoleParity, false },
     { "decouple_render", &sDecoupleRender, true },
     { "show_fps", &sShowFps, false },
@@ -463,6 +474,7 @@ nlohmann::json DefaultsJson(void) {
      * to override the compile-time feature defaults. */
 #ifdef PORT_DUAL_SCREEN_LINUX
     j["handheld_face_layout"] = true; /* defaults above are already label-bound */
+    j["handheld_defaults_v2"] = true; /* and already carry the v2 defaults */
 #endif
     j["bindings"] = nlohmann::json::object();
     for (const auto& d : kDefaults) {
@@ -780,6 +792,18 @@ extern "C" void Port_Config_Load(const char* path) {
         } catch (...) {
         }
         fprintf(stderr, "[CONFIG] handheld: face buttons bound by label (A=EAST, B=SOUTH, X=NORTH, Y=WEST)\n");
+    }
+    /* v2: configs from the first two handheld builds were written with the
+     * desktop default widescreen=on. Turn it off once; a player who turns it
+     * back on afterwards keeps it. */
+    if (!j.value("handheld_defaults_v2", false)) {
+        j["widescreen_enabled"] = false;
+        j["handheld_defaults_v2"] = true;
+        try {
+            std::ofstream(p) << j.dump(4) << '\n';
+        } catch (...) {
+        }
+        fprintf(stderr, "[CONFIG] handheld: widescreen off (4:3 top screen; re-enable in settings)\n");
     }
 #endif
 

@@ -53,7 +53,7 @@ The launcher writes `minishcapds/log.txt` on every run. Look for the
 | Bottom screen stays black | Look for `[second_screen] panel window …` in the log. If it says "only one display", sway has the bottom output disabled. Enable it in ROCKNIX's display settings. |
 | Taps do nothing | Check the `[second_screen] touch:` log line. If no touchscreen matched, run `ls -l /sys/class/input/event*/device` and set `TMC_PANEL_TOUCH_MATCH` (or `TMC_PANEL_TOUCH=/dev/input/eventN`) at the top of the launcher. |
 | Taps land in the wrong place | Set `TMC_PANEL_TOUCH_ROTATE=90/180/270`, `TMC_PANEL_TOUCH_FLIPX=1` or `TMC_PANEL_TOUCH_FLIPY=1` in the launcher. |
-| Game below 60 FPS | `log.txt` prints `[perf] … FPS` every second and a `[second_screen]` timing line every 10 s (paint, upload and present costs). Send both. |
+| Game below 60 FPS | `log.txt` has `[perf] … FPS / … TPS` every second, `[profile]` frame-phase timings every 2 s, and a `[second_screen]` panel line every 10 s. Send all three. To check whether the panel is involved, run once with `TMC_PANEL=0`, which disables it. |
 | Audio crackles | Raise the buffer with `TMC_AUDIO_FRAMES=3072` (default 2048, about 43 ms). |
 | Battery life matters more than frame rate | `TMC_GOVERNOR=keep` leaves ROCKNIX's own CPU/GPU governor setting in charge instead of `performance`. |
 
@@ -77,7 +77,11 @@ top of `Minish Cap DS.sh`.
   governors to `performance` while the game runs and restores them on exit.
   The music synth runs on a realtime audio thread with the cheaper LINEAR
   resampler. The panel paints at low priority, uploads only the rows that
-  changed, and spreads each upload over three game frames.
+  changed, and spreads each upload over three game frames. While the game
+  runs below 60 FPS the panel halves its refresh to 10 Hz
+  (`TMC_PANEL_ADAPTIVE=0` keeps it at 20). Widescreen is off by default:
+  the top screen is 4:3, so it only letterboxes the picture smaller at
+  a 60% higher render cost. It can still be turned on in settings.
 - **Libraries.** The port links against ROCKNIX's own SDL3. It bundles only
   `libgomp.so.1`. Built against glibc 2.27, so it runs on any current
   ROCKNIX.

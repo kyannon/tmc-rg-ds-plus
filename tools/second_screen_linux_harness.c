@@ -19,6 +19,8 @@
  */
 #include "../port/port_second_screen_linux.c"
 
+double gPortPaceFps = 0.0; /* port_bios.c's live FPS, driven by the test */
+static volatile uint32_t gLastTick = 0;
 static int gPaints = 0, gTaps = 0, gLastX = -1, gLastY = -1, gLastLong = -1;
 /* 0: every pixel changes each paint; 1: static frame; 2: only rows 100..109 change */
 static volatile int gPaintMode = 0;
@@ -40,6 +42,7 @@ static int gFails = 0;
 void Port_SecondScreen_PaintInto(uint32_t* pixels, int width, int height, int stride, const SecondScreenSnapshot* snap,
                                  uint32_t tick) {
     (void)snap;
+    gLastTick = tick;
     int mode = gPaintMode;
     for (int y = 0; y < height; y++) {
         int animate = mode == 0 || (mode == 2 && y >= 100 && y < 110);
@@ -182,6 +185,35 @@ int main(void) {
         }
         CHECK(!sPending && mismatch == -2, "texture == last presented frame after banded uploads (first bad row %d)",
               mismatch);
+    }
+
+    printf("[1c] adaptive panel rate\n");
+    {
+        gPaintMode = 1;
+        gPortPaceFps = 60.0;
+        PumpFor(1200);
+        int p0 = gPaints;
+        PumpFor(1000);
+        int fast = gPaints - p0;
+        CHECK(fast >= 17 && fast <= 21 && !atomic_load(&sPanelSlow), "game at 60: panel %d paints/s", fast);
+
+        gPortPaceFps = 40.0;
+        PumpFor(1300); /* next once-a-second evaluation */
+        uint32_t t0 = gLastTick;
+        p0 = gPaints;
+        PumpFor(1000);
+        int slowPaints = gPaints - p0;
+        uint32_t dt = gLastTick - t0;
+        CHECK(atomic_load(&sPanelSlow) && slowPaints >= 8 && slowPaints <= 11,
+              "game at 40: panel drops to %d paints/s", slowPaints);
+        CHECK(dt >= 16 && dt <= 22, "tick still advances ~20/s at half rate (%u)", dt);
+
+        gPortPaceFps = 59.0; /* not yet steady: stays slow */
+        PumpFor(2200);
+        CHECK(atomic_load(&sPanelSlow), "59 FPS is not 'steady': stays at 10 Hz");
+        gPortPaceFps = 60.0;
+        PumpFor(4300);
+        CHECK(!atomic_load(&sPanelSlow), "3 s steady at 60: back to 20 Hz");
     }
 
     printf("[2] SDL taps on the panel window\n");
