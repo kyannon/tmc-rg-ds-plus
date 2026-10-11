@@ -496,6 +496,12 @@ int main(int argc, char* argv[]) {
 
     Port_Config_OpenGamepads();
     Port_SecondScreen_Init();
+#ifdef PORT_DUAL_SCREEN_LINUX
+    {
+        extern void Port_Sampler_Init(void);
+        Port_Sampler_Init(); /* TMC_SAMPLE=1: game-thread hotspots in the log */
+    }
+#endif
 
     /* ROM probe deferred — the prelaunch screen (rendered after PPU
      * init below) handles ROM selection via Port_RomPicker_PromptAndInstall.

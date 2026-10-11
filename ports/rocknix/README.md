@@ -53,7 +53,7 @@ The launcher writes `minishcapds/log.txt` on every run. Look for the
 | Bottom screen stays black | Look for `[second_screen] panel window …` in the log. If it says "only one display", sway has the bottom output disabled. Enable it in ROCKNIX's display settings. |
 | Taps do nothing | Check the `[second_screen] touch:` log line. If no touchscreen matched, run `ls -l /sys/class/input/event*/device` and set `TMC_PANEL_TOUCH_MATCH` (or `TMC_PANEL_TOUCH=/dev/input/eventN`) at the top of the launcher. |
 | Taps land in the wrong place | Set `TMC_PANEL_TOUCH_ROTATE=90/180/270`, `TMC_PANEL_TOUCH_FLIPX=1` or `TMC_PANEL_TOUCH_FLIPY=1` in the launcher. |
-| Game below 60 FPS | `log.txt` has `[perf] … FPS / … TPS` every second, `[profile]` frame-phase timings every 2 s, and a `[second_screen]` panel line every 10 s. Send all three. To check whether the panel is involved, run once with `TMC_PANEL=0`, which disables it. |
+| Game below 60 FPS | `log.txt` has `[perf] … FPS / … TPS` every second, `[profile]` frame-phase timings every 2 s, `[sample]` lines naming the functions the game thread spends its time in every 10 s, and a `[second_screen]` panel line every 10 s. Send the whole log. `TMC_SAMPLE=0` / `TMC_PROFILE=0` switch the diagnostics off. To check whether the panel is involved, run once with `TMC_PANEL=0`, which disables it. |
 | Audio crackles | Raise the buffer with `TMC_AUDIO_FRAMES=3072` (default 2048, about 43 ms). |
 | Battery life matters more than frame rate | `TMC_GOVERNOR=keep` leaves ROCKNIX's own CPU/GPU governor setting in charge instead of `performance`. |
 

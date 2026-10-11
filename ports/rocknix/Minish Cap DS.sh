@@ -163,6 +163,9 @@ export GOMP_SPINCOUNT="${GOMP_SPINCOUNT:-20000}"
 # Frame-phase timings in log.txt every ~2 s: game logic, PPU raster and
 # present, average and worst. Two clock reads a frame; TMC_PROFILE=0 to drop.
 [ "${TMC_PROFILE:-1}" != "0" ] && export TMC_PROFILE=1 || unset TMC_PROFILE
+# Game-thread sampling profiler: names the functions behind slow ticks in
+# log.txt every 10 s ([sample] lines). TMC_SAMPLE=0 to switch it off.
+[ "${TMC_SAMPLE:-1}" != "0" ] && export TMC_SAMPLE=1 || unset TMC_SAMPLE
 
 if [ -n "$GPTOKEYB" ]; then
   $GPTOKEYB "tmc_pc" &

@@ -908,6 +908,10 @@ target("tmc_pc")
     add_files("port/port_second_screen_theme.c") -- TMC menu chrome / HUD art for the second screen, decoded from ROM
     if is_plat("linux") and has_config("dual_screen") then
         add_files("port/port_second_screen_linux.c") -- SDL window + evdev touch host for the panel
+        add_files("port/port_sampler.c") -- TMC_SAMPLE=1 game-thread sampling profiler
+        -- Frame records for the sampler's stack walk (a few % at most).
+        add_cflags("-fno-omit-frame-pointer", {force = true})
+        add_cxxflags("-fno-omit-frame-pointer", {force = true})
         add_defines("PORT_DUAL_SCREEN_LINUX")
         add_syslinks("pthread", "dl", "rt") -- glibc < 2.34 keeps dladdr / shm_open out of libc
         -- Self-contained C++ runtime: the binary runs on whatever libstdc++

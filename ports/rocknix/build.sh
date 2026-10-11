@@ -68,6 +68,10 @@ cp "$REPO/ports/rocknix/Minish Cap DS.sh" "$STAGE/"
 chmod +x "$STAGE/Minish Cap DS.sh"
 "$XT/bin/$XT_TRIPLE-strip" -o "$STAGE/minishcapds/tmc_pc" "$REPO/build/pc/tmc_pc"
 cp -L "$XT/$XT_TRIPLE/sysroot/lib/libgomp.so.1" "$STAGE/minishcapds/libs.aarch64/"
+# Function table for the TMC_SAMPLE profiler (offsets in the PIE, sorted).
+"$XT/bin/$XT_TRIPLE-nm" -C --defined-only -n "$REPO/build/pc/tmc_pc" \
+  | awk '$2 ~ /^[tTwW]$/ { name=$3; for (i=4;i<=NF;i++) name=name" "$i; sub(/^0+/, "", $1); print $1, substr(name,1,150) }' \
+  > "$STAGE/minishcapds/tmc_pc.syms"
 cp "$REPO/assets/sounds.json" "$STAGE/minishcapds/"
 cp "$REPO/ports/rocknix/README.md" "$STAGE/minishcapds/README.md"
 cp "$REPO/LICENSE" "$REPO/THIRD-PARTY-LICENSES.md" "$STAGE/minishcapds/"

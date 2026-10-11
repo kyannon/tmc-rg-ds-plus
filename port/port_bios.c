@@ -27,6 +27,7 @@
 #include <setjmp.h>
 #include "port_repro.h"
 #include "port_second_screen.h"
+#include "port_sampler.h"
 
 static bool gQuitRequested = false;
 static bool sFastForward = false;
@@ -720,6 +721,8 @@ void VBlankIntrWait(void) {
     u64 nowNs;
     bool decoupled;
 
+    Port_Sampler_GameSpan(0); /* the tick's game work ends here */
+
     /* Practice-mode pause: hold the engine here, presenting and pumping
      * events only (no Port_UpdateInput, so the game state can't advance),
      * until unpaused or a single frame-advance step is requested. The F8
@@ -963,6 +966,8 @@ void VBlankIntrWait(void) {
             Port_ProfileReportMaybe();
         }
     }
+
+    Port_Sampler_GameSpan(1); /* pacing done: next game tick's work starts */
 
     nowNs = lastFrameNs;
 
