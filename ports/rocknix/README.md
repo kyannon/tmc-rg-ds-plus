@@ -53,7 +53,7 @@ The launcher writes `minishcapds/log.txt` on every run. Look for the
 | Bottom screen stays black | Look for `[second_screen] panel window …` in the log. If it says "only one display", sway has the bottom output disabled. Enable it in ROCKNIX's display settings. |
 | Taps do nothing | Check the `[second_screen] touch:` log line. If no touchscreen matched, run `ls -l /sys/class/input/event*/device` and set `TMC_PANEL_TOUCH_MATCH` (or `TMC_PANEL_TOUCH=/dev/input/eventN`) at the top of the launcher. |
 | Taps land in the wrong place | Set `TMC_PANEL_TOUCH_ROTATE=90/180/270`, `TMC_PANEL_TOUCH_FLIPX=1` or `TMC_PANEL_TOUCH_FLIPY=1` in the launcher. |
-| Game below 60 FPS | `log.txt` has `[perf] … FPS / … TPS` every second, `[profile]` frame-phase timings every 2 s, `[sample]` lines naming the functions the game thread spends its time in every 10 s, and a `[second_screen]` panel line every 10 s. Send the whole log. `TMC_SAMPLE=0` / `TMC_PROFILE=0` switch the diagnostics off. To check whether the panel is involved, run once with `TMC_PANEL=0`, which disables it. |
+| Game below 60 FPS | `log.txt` always has `[perf] … FPS / … TPS` every second and a `[second_screen]` panel line every 10 s. For more detail, set `TMC_PROFILE=1` (frame-phase timings every 2 s) and `TMC_SAMPLE=1` (the functions the game thread spends its time in, every 10 s). To check whether the panel is involved, run once with `TMC_PANEL=0`, which disables it. |
 | Audio crackles | Raise the buffer with `TMC_AUDIO_FRAMES=3072` (default 2048, about 43 ms). |
 | Battery life matters more than frame rate | `TMC_GOVERNOR=keep` leaves ROCKNIX's own CPU/GPU governor setting in charge instead of `performance`. |
 
@@ -62,10 +62,11 @@ top of `Minish Cap DS.sh`.
 
 ## How it works
 
-- **Screens.** The launcher asks sway which output is focused (the top
-  screen) and powers the other one on if ROCKNIX left it off. It then tells
-  SDL to list the top screen first, so the game opens fullscreen there and
-  the panel takes the bottom one.
+- **Screens.** On the RG DS family the launcher uses `DSI-2` as the top
+  screen and `DSI-1`, the touch panel, as the bottom. On other devices it
+  takes the output sway has focused as the top. It powers the bottom output
+  on if ROCKNIX left it off, then tells SDL to list the top screen first,
+  so the game opens fullscreen there and the panel takes the bottom one.
 - **Panel.** A second SDL window, painted 20 times a second on its own
   thread from a snapshot of the game state.
 - **Touch.** The bottom touchscreen is read directly from evdev and grabbed
@@ -82,6 +83,10 @@ top of `Minish Cap DS.sh`.
   (`TMC_PANEL_ADAPTIVE=0` keeps it at 20). Widescreen is off by default:
   the top screen is 4:3, so it only letterboxes the picture smaller at
   a 60% higher render cost. It can still be turned on in settings.
+- **Asset lookups.** The game checks on almost every memory copy whether a
+  pointer lies in an asset loaded from the ROM. Those checks are a binary
+  search over a sorted index; a linear scan here was what held the RK3568
+  below 60 FPS.
 - **Libraries.** The port links against ROCKNIX's own SDL3. It bundles only
   `libgomp.so.1`. Built against glibc 2.27, so it runs on any current
   ROCKNIX.
